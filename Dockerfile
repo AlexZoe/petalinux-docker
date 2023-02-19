@@ -1,13 +1,6 @@
-FROM ubuntu:18.04
+# =============== Install Dependencies
 
-MAINTAINER z4yx <z4yx@users.noreply.github.com>
-
-# build with "docker build --build-arg PETA_VERSION=2020.2 --build-arg PETA_RUN_FILE=petalinux-v2020.2-final-installer.run -t petalinux:2020.2 ."
-
-# install dependences:
-
-ARG UBUNTU_MIRROR
-RUN [ -z "${UBUNTU_MIRROR}" ] || sed -i.bak s/archive.ubuntu.com/${UBUNTU_MIRROR}/g /etc/apt/sources.list
+FROM ubuntu:18.04 as base
 
 RUN apt-get update &&  DEBIAN_FRONTEND=noninteractive apt-get install -y -q \
   build-essential \
@@ -65,36 +58,48 @@ RUN dpkg --add-architecture i386 &&  apt-get update &&  \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
+# make a Ubuntu user
 
-ARG PETA_VERSION
-ARG PETA_RUN_FILE
+ARG HOST_UID
+
+RUN adduser --disabled-password --gecos '' ubuntu --uid ${HOST_UID} && \
+  usermod -aG sudo ubuntu && \
+  echo "ubuntu ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
+
+ENV HOME /home/ubuntu
 
 RUN locale-gen en_US.UTF-8 && update-locale
+ENV LANGUAGE en_US:en
+ENV LC_ALL en_US.UTF-8
+ENV LANG en_US.UTF-8
 
-#make a Vivado user
-RUN adduser --disabled-password --gecos '' vivado && \
-  usermod -aG sudo vivado && \
-  echo "vivado ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
+WORKDIR /home/ubuntu
 
-COPY accept-eula.sh ${PETA_RUN_FILE} /
+# =============== Petalinux Installation
+
+FROM base as petalinux
+USER ubuntu:ubuntu
+
+ARG PETA_RUN_FILE
+
+COPY --chown=ubuntu:ubuntu accept-eula.sh ${HOME}/accept-eula.sh
+COPY --chown=ubuntu:ubuntu ${PETA_RUN_FILE} ${HOME}/${PETA_RUN_FILE}
+
+WORKDIR /tmp
 
 # run the install
-RUN chmod a+rx /${PETA_RUN_FILE} && \
-  chmod a+rx /accept-eula.sh && \
-  mkdir -p /opt/Xilinx && \
-  chmod 777 /tmp /opt/Xilinx && \
-  cd /tmp && \
-  sudo -u vivado -i /accept-eula.sh /${PETA_RUN_FILE} /opt/Xilinx/petalinux && \
-  rm -f /${PETA_RUN_FILE} /accept-eula.sh
+RUN sudo mkdir -p /opt/Xilinx && \
+  sudo chown ubuntu:ubuntu /opt/Xilinx && \
+  sudo -u ubuntu -i /home/ubuntu/accept-eula.sh ${HOME}/${PETA_RUN_FILE} /opt/Xilinx/petalinux && \
+  rm -f ${HOME}/${PETA_RUN_FILE} ${HOME}/accept-eula.sh \
+  rm -f ${HOME}/petalinux_installation_log
 
 # make /bin/sh symlink to bash instead of dash:
-RUN echo "dash dash/sh boolean false" | debconf-set-selections
-RUN DEBIAN_FRONTEND=noninteractive dpkg-reconfigure dash
+RUN echo "dash dash/sh boolean false" | sudo debconf-set-selections
+RUN sudo DEBIAN_FRONTEND=noninteractive dpkg-reconfigure dash
 
-USER vivado
-ENV HOME /home/vivado
-ENV LANG en_US.UTF-8
-WORKDIR /home/vivado
+RUN echo "source /opt/Xilinx/petalinux/settings.sh" >> ${HOME}/.bashrc
 
-#add vivado tools to path
-RUN echo "source /opt/Xilinx/petalinux/settings.sh" >> /home/vivado/.bashrc
+RUN sudo usermod -a -G dialout ubuntu
+
+WORKDIR ${HOME}
